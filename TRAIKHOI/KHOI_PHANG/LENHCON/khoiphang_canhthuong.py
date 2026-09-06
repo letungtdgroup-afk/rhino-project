@@ -18,6 +18,8 @@ is designed to be easy to review and extend later.
 """
 
 import math
+import os
+import sys
 
 import Rhino
 import rhinoscriptsyntax as rs
@@ -27,6 +29,44 @@ import scriptcontext as sc
 COMMAND_NAME = "KHOIPHANG_THUONG"
 VERSION = "1.0.0"
 LAYOUT_SPACING_MM = 10.0
+RUN_SC_AFTER_UNROLL = True
+RUN_CHAN_AFTER_SC = True
+
+
+def _target_path(filename):
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "target", filename)
+
+
+def _load_target(module_name, filename):
+    """Load a target script, including under Rhino 7's IronPython 2.7."""
+    path = _target_path(filename)
+    if not os.path.isfile(path):
+        raise IOError("Khong tim thay target: {0}".format(path))
+
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        return module
+    except (ImportError, AttributeError):
+        import imp
+        return imp.load_source(module_name, path)
+
+
+def _run_sc(object_ids):
+    _write("Chuyen ket qua sang SC.py.")
+    module = _load_target("khoiphang_target_sc", "SC.py")
+    return module.integrated_smart_process(object_ids)
+
+
+def _run_chan():
+    _write("Mo CHAN v2.1.1; hay chon dung mot nhom contour va DUONG_CHAN/SOI.")
+    module = _load_target("khoiphang_target_chan_v2_1_1",
+                          "CHAN_v2.1.1.py")
+    return module.run_safe()
 
 
 def _write(message):
@@ -346,6 +386,26 @@ def run_command():
 
     if failures:
         _write("Một số đối tượng không tạo được mặt phẳng: {0}".format(failures))
+
+    if RUN_SC_AFTER_UNROLL and created_ids:
+        try:
+            sc_outputs = _run_sc(created_ids)
+            _write("SC hoan thanh: contour={0}; soi/chan={1}; danh_ma={2}.".format(
+                len(sc_outputs.get("borders", [])),
+                len(sc_outputs.get("inner_curves", [])),
+                len(sc_outputs.get("marks", []))))
+        except Exception as error:
+            _write("SC loi; khong chay CHAN: {0}".format(error))
+            return
+
+        if RUN_CHAN_AFTER_SC:
+            # CHAN keeps its own selection prompt. Processing unrelated flat
+            # parts in one Boolean operation can discard contours, so select
+            # one valid contour + DUONG_CHAN/SOI group at a time.
+            try:
+                _run_chan()
+            except Exception as error:
+                _write("Khong khoi dong duoc CHAN: {0}".format(error))
 
 
 if __name__ == "__main__":
